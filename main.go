@@ -152,46 +152,66 @@ func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 		title = strings.ReplaceAll(title, ",", " -")
 
 		var logo string
+		autoPlayID := ""
+
 		if emf, ok := metadata["emfAttributes"].(map[string]interface{}); ok {
 			if l, ok := emf["landscape_thumb"].(string); ok {
 				logo = l
 			} else if s, ok := emf["square_thumb"].(string); ok {
 				logo = s
 			}
+			if apID, ok := emf["auto_play_id"].(float64); ok {
+				autoPlayID = fmt.Sprintf("%.0f", apID)
+			}
 		}
 
 		wg.Add(1)
-		go func(cID, t, l string) {
+		go func(cID, apID, t, l string) {
 			defer wg.Done()
-			playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv", cID)
-			playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
 
-			if err == nil {
-				var playData map[string]interface{}
-				if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
-					if rawURL, ok := playData["url"].(string); ok {
-						parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
-						u, err := url.Parse(parsableURL)
-						if err == nil {
-							hdnea := u.Query().Get("hdnea")
-							u.RawQuery = ""
-							if hdnea != "" {
-								u.RawQuery = "hdnea=" + hdnea
-							}
-							cleanedURL := u.String()
-							cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
-							cleanedURL = strings.Replace(cleanedURL, "std_mdh-800300010", "master", -1)
-
-							entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"Live Sports\",%s\n%s\n", l, t, cleanedURL)
-
-							mu.Lock()
-							m3uContent += entry
-							mu.Unlock()
+			fetchCipher := func(id string) string {
+				if id == "" {
+					return ""
+				}
+				playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv", id)
+				playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
+				if err == nil {
+					var playData map[string]interface{}
+					if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
+						if rawURL, ok := playData["url"].(string); ok {
+							return rawURL
 						}
 					}
 				}
+				return ""
 			}
-		}(contentID, title, logo)
+
+			rawURL := fetchCipher(cID)
+			if rawURL == "" {
+				rawURL = fetchCipher(apID)
+			}
+
+			if rawURL != "" {
+				parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
+				u, err := url.Parse(parsableURL)
+				if err == nil {
+					hdnea := u.Query().Get("hdnea")
+					u.RawQuery = ""
+					if hdnea != "" {
+						u.RawQuery = "hdnea=" + hdnea
+					}
+					cleanedURL := u.String()
+					cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
+					cleanedURL = strings.Replace(cleanedURL, "std_mdh-800300010", "master", -1)
+
+					entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"Live Sports\",%s\n%s\n", l, t, cleanedURL)
+
+					mu.Lock()
+					m3uContent += entry
+					mu.Unlock()
+				}
+			}
+		}(contentID, autoPlayID, title, logo)
 	}
 
 	wg.Wait()
@@ -256,53 +276,72 @@ func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
 		title = strings.ReplaceAll(title, ",", " -")
 
 		var logo string
+		autoPlayID := ""
+
 		if emf, ok := metadata["emfAttributes"].(map[string]interface{}); ok {
 			if l, ok := emf["landscape_thumb"].(string); ok {
 				logo = l
 			} else if s, ok := emf["square_thumb"].(string); ok {
 				logo = s
 			}
+			if apID, ok := emf["auto_play_id"].(float64); ok {
+				autoPlayID = fmt.Sprintf("%.0f", apID)
+			}
 		}
 
 		wg.Add(1)
-		go func(cID, t, l string) {
+		go func(cID, apID, t, l string) {
 			defer wg.Done()
-			playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv&scheme=widevine", cID)
-			playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
 
-			if err == nil {
-				var playData map[string]interface{}
-				if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
-					rawURL, urlOk := playData["url"].(string)
-					licenseURL, licOk := playData["drm_license_url"].(string)
+			fetchCipher := func(id string) (string, string) {
+				if id == "" {
+					return "", ""
+				}
+				playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv&scheme=widevine", id)
+				playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
 
-					if urlOk && licOk {
-						parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
-						u, err := url.Parse(parsableURL)
-						if err == nil {
-							hdnea := u.Query().Get("hdnea")
-							u.RawQuery = ""
-							if hdnea != "" {
-								u.RawQuery = "hdnea=" + hdnea
-							}
-							cleanedURL := u.String()
-							cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
-
-							entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"VOD Sports\",%s\n", l, t)
-							entry += "#KODIPROP:inputstream=inputstream.adaptive\n"
-							entry += "#KODIPROP:inputstream.adaptive.manifest_type=mpd\n"
-							entry += "#KODIPROP:inputstream.adaptive.license_type=com.widevine.alpha\n"
-							entry += fmt.Sprintf("#KODIPROP:inputstream.adaptive.license_key=%s\n", licenseURL)
-							entry += fmt.Sprintf("%s\n", cleanedURL)
-
-							mu.Lock()
-							m3uContent += entry
-							mu.Unlock()
-						}
+				if err == nil {
+					var playData map[string]interface{}
+					if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
+						rawURL, _ := playData["url"].(string)
+						licenseURL, _ := playData["drm_license_url"].(string)
+						return rawURL, licenseURL
 					}
 				}
+				return "", ""
 			}
-		}(contentID, title, logo)
+
+			rawURL, licenseURL := fetchCipher(cID)
+			
+			if rawURL == "" || licenseURL == "" {
+				rawURL, licenseURL = fetchCipher(apID)
+			}
+
+			if rawURL != "" && licenseURL != "" {
+				parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
+				u, err := url.Parse(parsableURL)
+				if err == nil {
+					hdnea := u.Query().Get("hdnea")
+					u.RawQuery = ""
+					if hdnea != "" {
+						u.RawQuery = "hdnea=" + hdnea
+					}
+					cleanedURL := u.String()
+					cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
+
+					entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"VOD Sports\",%s\n", l, t)
+					entry += "#KODIPROP:inputstream=inputstream.adaptive\n"
+					entry += "#KODIPROP:inputstream.adaptive.manifest_type=mpd\n"
+					entry += "#KODIPROP:inputstream.adaptive.license_type=com.widevine.alpha\n"
+					entry += fmt.Sprintf("#KODIPROP:inputstream.adaptive.license_key=%s\n", licenseURL)
+					entry += fmt.Sprintf("%s\n", cleanedURL)
+
+					mu.Lock()
+					m3uContent += entry
+					mu.Unlock()
+				}
+			}
+		}(contentID, autoPlayID, title, logo)
 	}
 
 	wg.Wait()
