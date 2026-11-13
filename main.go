@@ -19,7 +19,6 @@ func enableCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
-// 1. Website: Series Data
 func seriesHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
 	if r.Method == "OPTIONS" {
@@ -36,10 +35,9 @@ func seriesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(resp.Bytes()) // Fixed from resp.Body()
+	w.Write(resp.Bytes())
 }
 
-// 2. Website: Playback API (JSON)
 func playHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
 	if r.Method == "OPTIONS" {
@@ -95,7 +93,6 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(rawJSON))
 }
 
-// 3. Player: Live M3U Playlist
 func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
 	if r.Method == "OPTIONS" {
@@ -223,7 +220,6 @@ func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(m3uContent))
 }
 
-// 4. Player: VOD M3U Playlist
 func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
 	if r.Method == "OPTIONS" {
@@ -231,7 +227,7 @@ func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := resty.New()
-	pageURL := "https://apiv3.sonyliv.com/AGL/4.9/A/ENG/MWEB/BD/FL/PAGE/17378"
+	pageURL := "https://apiv3.sonyliv.com/AGL/4.8/SR/ENG/MWEB/BD/FL/PAGE/1111_9014359?packageId=liv_premium_GP_1m&kids_safe=false&from=0&to=50"
 
 	resp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(pageURL)
 	if err != nil {
