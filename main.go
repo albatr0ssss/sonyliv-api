@@ -145,11 +145,22 @@ func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		contentID := fmt.Sprintf("%.0f", contentIdF)
 
-		title, _ := metadata["episodeTitle"].(string)
-		if title == "" {
-			title, _ = metadata["title"].(string)
+		mainTitle, _ := metadata["title"].(string)
+		epTitle, _ := metadata["episodeTitle"].(string)
+
+		reDate := regexp.MustCompile(`(?i)\s*-\s*\d{1,2}\s+[a-z]{3}\s+\d{4}\s*$`)
+		epTitle = reDate.ReplaceAllString(epTitle, "")
+
+		var finalTitle string
+		if epTitle != "" && mainTitle != "" && epTitle != mainTitle {
+			finalTitle = epTitle + " - " + mainTitle
+		} else if epTitle != "" {
+			finalTitle = epTitle
+		} else {
+			finalTitle = mainTitle
 		}
-		title = strings.ReplaceAll(title, ",", " -")
+
+		finalTitle = strings.ReplaceAll(finalTitle, ",", " -")
 
 		var logo string
 		autoPlayID := ""
@@ -211,142 +222,12 @@ func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 					mu.Unlock()
 				}
 			}
-		}(contentID, autoPlayID, title, logo)
+		}(contentID, autoPlayID, finalTitle, logo)
 	}
 
 	wg.Wait()
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Content-Disposition", `attachment; filename="live.m3u"`)
-	w.Write([]byte(m3uContent))
-}
-
-func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
-	if r.Method == "OPTIONS" {
-		return
-	}
-
-	client := resty.New()
-	pageURL := "https://apiv3.sonyliv.com/AGL/2.6/SR/ENG/MWEB/BD/FL/CONTENT/DETAIL/BUNDLE/1500001077?from=0&to=9&orderBy=episodeNumber&sortOrder=asc&kids_safe=false"
-
-	resp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(pageURL)
-	if err != nil {
-		http.Error(w, "Failed to fetch page API", 500)
-		return
-	}
-
-	var pageData map[string]interface{}
-	if err := json.Unmarshal(resp.Bytes(), &pageData); err != nil {
-		http.Error(w, "Failed to parse API JSON", 500)
-		return
-	}
-
-	resultObj, ok := pageData["resultObj"].(map[string]interface{})
-	if !ok {
-		http.Error(w, "Invalid API structure", 500)
-		return
-	}
-
-	items := extractItems(resultObj)
-	m3uContent := "#EXTM3U\n"
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	for _, item := range items {
-		metadata, ok := item["metadata"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		isLive, _ := metadata["isLive"].(bool)
-		if isLive {
-			continue
-		}
-
-		contentIdF, ok := metadata["contentId"].(float64)
-		if !ok {
-			continue
-		}
-		contentID := fmt.Sprintf("%.0f", contentIdF)
-
-		title, _ := metadata["episodeTitle"].(string)
-		if title == "" {
-			title, _ = metadata["title"].(string)
-		}
-		title = strings.ReplaceAll(title, ",", " -")
-
-		var logo string
-		autoPlayID := ""
-
-		if emf, ok := metadata["emfAttributes"].(map[string]interface{}); ok {
-			if l, ok := emf["landscape_thumb"].(string); ok {
-				logo = l
-			} else if s, ok := emf["square_thumb"].(string); ok {
-				logo = s
-			}
-			if apID, ok := emf["auto_play_id"].(float64); ok {
-				autoPlayID = fmt.Sprintf("%.0f", apID)
-			}
-		}
-
-		wg.Add(1)
-		go func(cID, apID, t, l string) {
-			defer wg.Done()
-
-			fetchCipher := func(id string) (string, string) {
-				if id == "" {
-					return "", ""
-				}
-				playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv&scheme=widevine", id)
-				playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
-
-				if err == nil {
-					var playData map[string]interface{}
-					if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
-						rawURL, _ := playData["url"].(string)
-						licenseURL, _ := playData["drm_license_url"].(string)
-						return rawURL, licenseURL
-					}
-				}
-				return "", ""
-			}
-
-			rawURL, licenseURL := fetchCipher(cID)
-			
-			if rawURL == "" || licenseURL == "" {
-				rawURL, licenseURL = fetchCipher(apID)
-			}
-
-			if rawURL != "" && licenseURL != "" {
-				parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
-				u, err := url.Parse(parsableURL)
-				if err == nil {
-					hdnea := u.Query().Get("hdnea")
-					u.RawQuery = ""
-					if hdnea != "" {
-						u.RawQuery = "hdnea=" + hdnea
-					}
-					cleanedURL := u.String()
-					cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
-
-					entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"VOD Sports\",%s\n", l, t)
-					entry += "#KODIPROP:inputstream=inputstream.adaptive\n"
-					entry += "#KODIPROP:inputstream.adaptive.manifest_type=mpd\n"
-					entry += "#KODIPROP:inputstream.adaptive.license_type=com.widevine.alpha\n"
-					entry += fmt.Sprintf("#KODIPROP:inputstream.adaptive.license_key=%s\n", licenseURL)
-					entry += fmt.Sprintf("%s\n", cleanedURL)
-
-					mu.Lock()
-					m3uContent += entry
-					mu.Unlock()
-				}
-			}
-		}(contentID, autoPlayID, title, logo)
-	}
-
-	wg.Wait()
-	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.Header().Set("Content-Disposition", `attachment; filename="vod.m3u"`)
 	w.Write([]byte(m3uContent))
 }
 
@@ -358,7 +239,6 @@ func main() {
 
 	http.HandleFunc("/api/play", playHandler)
 	http.HandleFunc("/live.m3u", liveM3uHandler)
-	http.HandleFunc("/vod.m3u", vodM3uHandler)
 
 	http.ListenAndServe(":"+port, nil)
 }
