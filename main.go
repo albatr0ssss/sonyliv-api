@@ -1,7 +1,7 @@
 package main
 import ("encoding/json";"fmt";"net/http";"os";"regexp";"strings";"sync";"time";"resty.dev/v3")
 
-const TOKEN, RAIL, UA = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL3RvZmZlZWxpdmUuY29tIiwiY291bnRyeSI6IkJEIiwiZF9pZCI6ImRkMzIzYWJkLWQwMjUtNDk0MS1iMDBiLWYyZTEyZTk2N2M1MSIsImV4cCI6MTc5NzIyNjYzMywiaWF0IjoxNzk0NTk2ODMzLCJpc3MiOiJ0b2ZmZWVsaXZlLmNvbSIsImp0aSI6IjgyZWZiNzQ4LTllNmYtNDc4NS05NGM1LWQ4MzczMTE1NWRiM18xNzk0NTk2ODMzIiwicHJvdmlkZXIiOiJ0b2ZmZWUiLCJyX2lkIjoiZGQzMjNhYmQtZDAyNS00OTQxLWIwMGItZjJlMTJlOTY3YzUxIiwic19pZCI6ImRkMzIzYWJkLWQwMjUtNDk0MS1iMDBiLWYyZTEyZTk2N2M1MSIsInRva2VuIjoiYWNjZXNzIiwidHlwZSI6ImRldmljZSJ9.SRNBuOF56fCGI1DAk-H1P2vetDatWUoenY9fJXbbuiQQ_RIwvuaRaN53DgU_1OcZ6CLncYJncWg2O_hYyyzjTA", "032cc9194378b850b2fec39c6386fd1f", "Mozilla/5.0 (Linux; Android 10; K)"
+const TOKEN, RAIL, UA = "EyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL3RvZmZlZWxpdmUuY29tIiwiY291bnRyeSI6IkJEIiwiZF9pZCI6IjEwZmFiZDJlLWNmZjktNGViZi1iZDU5LTdkOWMyY2E1MzZlNiIsImV4cCI6MTc5NTI2MjcxNiwiaWF0IjoxNzc5NzEwNzE2LCJpc3MiOiJ0b2ZmZWVsaXZlLmNvbSIsImp0aSI6IjZhZTJjNDc2LTNjOTctNDcwYS1hMmZlLTU0OGFkMmQ3YjZlZl8xNzc5NzEwNzE2IiwicHJvdmlkZXIiOiJ0b2ZmZWUiLCJyX2lkIjoiOTBhNTg1MzUtNjIzYy00YzgwLTg4MDYtZjY1YjY5NGU2YjcyIiwic19pZCI6ImY4NjhiZjNkLWNiZjUtNDE5MS1hZWZiLWI3MTRjNGEwZTM1ZCIsInRva2VuIjoicmVmcmVzaCIsInR5cGUiOiJzdWJzY3JpYmVyIn0.xtWFphKUAgBYh8UfXLsMkJTxkN3lVWQLyQayFI2Fhm2qcGoi138SNAEUnJ-_luWVsTm4_Crq9qP94HOblsPNsg", "032cc9194378b850b2fec39c6386fd1f", "Mozilla/5.0 (Linux; Android 10; K)"
 var kv sync.Map
 
 func getC(k string) (interface{}, bool) { if i, ok := kv.Load(k); ok { if time.Now().Unix() < i.([]interface{})[1].(int64) { return i.([]interface{})[0], true }; kv.Delete(k) }; return nil, false }
