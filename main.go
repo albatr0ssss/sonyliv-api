@@ -19,42 +19,27 @@ func enableCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
-// Universal Item Extractor (Handles both Tray/Assets and Direct Items)
-func extractItems(containers []interface{}) []map[string]interface{} {
+func extractItems(data interface{}) []map[string]interface{} {
 	var items []map[string]interface{}
-	for _, cIf := range containers {
-		c, ok := cIf.(map[string]interface{})
-		if !ok {
-			continue
+
+	switch v := data.(type) {
+	case []interface{}:
+		for _, item := range v {
+			items = append(items, extractItems(item)...)
 		}
-		if assets, hasAssets := c["assets"].(map[string]interface{}); hasAssets {
-			if inner, ok := assets["containers"].([]interface{}); ok {
-				items = append(items, extractItems(inner)...)
+	case map[string]interface{}:
+		if _, hasMeta := v["metadata"]; hasMeta {
+			if _, hasId := v["id"]; hasId {
+				items = append(items, v)
 			}
-		} else if _, hasMeta := c["metadata"]; hasMeta {
-			items = append(items, c)
+		}
+		for key, val := range v {
+			if key == "containers" || key == "assets" {
+				items = append(items, extractItems(val)...)
+			}
 		}
 	}
 	return items
-}
-
-func seriesHandler(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
-	if r.Method == "OPTIONS" {
-		return
-	}
-
-	client := resty.New()
-	resp, err := client.R().
-		SetHeader("User-Agent", "Mozilla/5.0").
-		Get("https://apiv3.sonyliv.com/AGL/2.6/SR/ENG/MWEB/BD/FL/CONTENT/DETAIL/BUNDLE/1500001077")
-
-	if err != nil {
-		http.Error(w, `{"error": "Failed"}`, 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(resp.Bytes())
 }
 
 func playHandler(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +67,6 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rawJSON := string(resp.Bytes())
-
 	re := regexp.MustCompile(`"url"\s*:\s*"([^"]+)"`)
 	matches := re.FindStringSubmatch(rawJSON)
 
@@ -135,17 +119,11 @@ func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 
 	resultObj, ok := pageData["resultObj"].(map[string]interface{})
 	if !ok {
-		http.Error(w, "Invalid API structure: Missing resultObj", 500)
+		http.Error(w, "Invalid API structure", 500)
 		return
 	}
 
-	containers, ok := resultObj["containers"].([]interface{})
-	if !ok {
-		http.Error(w, "Invalid API structure: Missing containers", 500)
-		return
-	}
-
-	items := extractItems(containers)
+	items := extractItems(resultObj)
 	m3uContent := "#EXTM3U\n"
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -245,17 +223,11 @@ func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
 
 	resultObj, ok := pageData["resultObj"].(map[string]interface{})
 	if !ok {
-		http.Error(w, "Invalid API structure: Missing resultObj", 500)
+		http.Error(w, "Invalid API structure", 500)
 		return
 	}
 
-	containers, ok := resultObj["containers"].([]interface{})
-	if !ok {
-		http.Error(w, "Invalid API structure: Missing containers", 500)
-		return
-	}
-
-	items := extractItems(containers)
+	items := extractItems(resultObj)
 	m3uContent := "#EXTM3U\n"
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -345,7 +317,6 @@ func main() {
 		port = "8080"
 	}
 
-	http.HandleFunc("/api/series", seriesHandler)
 	http.HandleFunc("/api/play", playHandler)
 	http.HandleFunc("/live.m3u", liveM3uHandler)
 	http.HandleFunc("/vod.m3u", vodM3uHandler)
