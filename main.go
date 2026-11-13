@@ -74,10 +74,14 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 
 	if len(matches) > 1 {
 		originalURL := matches[1]
-		u, err := url.Parse(originalURL)
+		
+		parsableURL := strings.ReplaceAll(originalURL, `\u0026`, "&")
+		
+		u, err := url.Parse(parsableURL)
 		
 		if err == nil {
 			hdnea := u.Query().Get("hdnea")
+			
 			u.RawQuery = ""
 			
 			if hdnea != "" {
