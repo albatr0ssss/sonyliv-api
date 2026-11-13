@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 
 	"resty.dev/v3"
 )
@@ -17,7 +20,9 @@ func enableCORS(w http.ResponseWriter) {
 
 func seriesHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
-	if r.Method == "OPTIONS" { return }
+	if r.Method == "OPTIONS" {
+		return
+	}
 
 	client := resty.New()
 	resp, err := client.R().
@@ -28,16 +33,23 @@ func seriesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "Failed"}`, 500)
 		return
 	}
-	// এখানে ফিক্স করা হয়েছে (Body() এর বদলে Bytes())
 	w.Write(resp.Bytes())
 }
 
 func playHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
-	if r.Method == "OPTIONS" { return }
+	if r.Method == "OPTIONS" {
+		return
+	}
 
 	contentID := r.URL.Query().Get("id")
-	targetURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv&scheme=widevine", contentID)
+	isLive := r.URL.Query().Get("isLive")
+
+	targetURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv", contentID)
+
+	if isLive != "true" {
+		targetURL += "&scheme=widevine"
+	}
 
 	client := resty.New()
 	resp, err := client.R().
@@ -48,13 +60,40 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "Failed"}`, 500)
 		return
 	}
+
+	var playData map[string]interface{}
+	if err := json.Unmarshal(resp.Bytes(), &playData); err == nil {
+		if rawURL, ok := playData["url"].(string); ok {
+
+			u, err := url.Parse(rawURL)
+			if err == nil {
+				hdnea := u.Query().Get("hdnea")
+
+				u.RawQuery = ""
+
+				if hdnea != "" {
+					u.RawQuery = "hdnea=" + hdnea
+				}
+
+				cleanedURL := u.String()
+				cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
+
+				playData["url"] = cleanedURL
+			}
+		}
+
+		modifiedJSON, _ := json.Marshal(playData)
+		w.Write(modifiedJSON)
+		return
+	}
+
 	w.Write(resp.Bytes())
 }
 
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080" 
+		port = "8080"
 	}
 	http.HandleFunc("/api/series", seriesHandler)
 	http.HandleFunc("/api/play", playHandler)
