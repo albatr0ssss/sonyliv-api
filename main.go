@@ -28,7 +28,8 @@ func seriesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "Failed"}`, 500)
 		return
 	}
-	w.Write(resp.Body())
+	// এখানে ফিক্স করা হয়েছে (Body() এর বদলে Bytes())
+	w.Write(resp.Bytes())
 }
 
 func playHandler(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +48,7 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "Failed"}`, 500)
 		return
 	}
-	w.Write(resp.Body())
+	w.Write(resp.Bytes())
 }
 
 func main() {
