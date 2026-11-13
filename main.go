@@ -34,7 +34,7 @@ func extractItems(data interface{}) []map[string]interface{} {
 			}
 		}
 		for key, val := range v {
-			if key == "containers" || key == "assets" {
+			if key == "containers" || key == "assets" || key == "episodes" || key == "items" {
 				items = append(items, extractItems(val)...)
 			}
 		}
@@ -227,7 +227,7 @@ func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := resty.New()
-	pageURL := "https://apiv3.sonyliv.com/AGL/4.8/SR/ENG/MWEB/BD/FL/PAGE/1111_9014359?packageId=liv_premium_GP_1m&kids_safe=false&from=0&to=50"
+	pageURL := "https://apiv3.sonyliv.com/AGL/2.6/SR/ENG/MWEB/BD/FL/CONTENT/DETAIL/BUNDLE/1500001077?from=0&to=9&orderBy=episodeNumber&sortOrder=asc&kids_safe=false"
 
 	resp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(pageURL)
 	if err != nil {
