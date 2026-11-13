@@ -1,20 +1,11 @@
 package main
-import ("crypto/hmac";"crypto/sha256";"encoding/hex";"encoding/json";"fmt";"net/http";"net/url";"os";"regexp";"strings";"sync";"time";"resty.dev/v3")
+import ("encoding/json";"fmt";"net/http";"os";"regexp";"strings";"sync";"time";"resty.dev/v3")
 
-const TOKEN, RAIL, UA, TK_SEC = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL3RvZmZlZWxpdmUuY29tIiwiY291bnRyeSI6IkJEIiwiZF9pZCI6ImRkMzIzYWJkLWQwMjUtNDk0MS1iMDBiLWYyZTEyZTk2N2M1MSIsImV4cCI6MTc5NzIyNjYzMywiaWF0IjoxNzk0NTk2ODMzLCJpc3MiOiJ0b2ZmZWVsaXZlLmNvbSIsImp0aSI6IjgyZWZiNzQ4LTllNmYtNDc4NS05NGM1LWQ4MzczMTE1NWRiM18xNzk0NTk2ODMzIiwicHJvdmlkZXIiOiJ0b2ZmZWUiLCJyX2lkIjoiZGQzMjNhYmQtZDAyNS00OTQxLWIwMGItZjJlMTJlOTY3YzUxIiwic19pZCI6ImRkMzIzYWJkLWQwMjUtNDk0MS1iMDBiLWYyZTEyZTk2N2M1MSIsInRva2VuIjoiYWNjZXNzIiwidHlwZSI6ImRldmljZSJ9.SRNBuOF56fCGI1DAk-H1P2vetDatWUoenY9fJXbbuiQQ_RIwvuaRaN53DgU_1OcZ6CLncYJncWg2O_hYyyzjTA", "032cc9194378b850b2fec39c6386fd1f", "Mozilla/5.0 (Linux; Android 10; K)", "HadyAkamaiCloneKey26"
+const TOKEN, RAIL, UA = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL3RvZmZlZWxpdmUuY29tIiwiY291bnRyeSI6IkJEIiwiZF9pZCI6ImRkMzIzYWJkLWQwMjUtNDk0MS1iMDBiLWYyZTEyZTk2N2M1MSIsImV4cCI6MTc5NzIyNjYzMywiaWF0IjoxNzk0NTk2ODMzLCJpc3MiOiJ0b2ZmZWVsaXZlLmNvbSIsImp0aSI6IjgyZWZiNzQ4LTllNmYtNDc4NS05NGM1LWQ4MzczMTE1NWRiM18xNzk0NTk2ODMzIiwicHJvdmlkZXIiOiJ0b2ZmZWUiLCJyX2lkIjoiZGQzMjNhYmQtZDAyNS00OTQxLWIwMGItZjJlMTJlOTY3YzUxIiwic19pZCI6ImRkMzIzYWJkLWQwMjUtNDk0MS1iMDBiLWYyZTEyZTk2N2M1MSIsInRva2VuIjoiYWNjZXNzIiwidHlwZSI6ImRldmljZSJ9.SRNBuOF56fCGI1DAk-H1P2vetDatWUoenY9fJXbbuiQQ_RIwvuaRaN53DgU_1OcZ6CLncYJncWg2O_hYyyzjTA", "032cc9194378b850b2fec39c6386fd1f", "Mozilla/5.0 (Linux; Android 10; K)"
 var kv sync.Map
 
 func getC(k string) (interface{}, bool) { if i, ok := kv.Load(k); ok { if time.Now().Unix() < i.([]interface{})[1].(int64) { return i.([]interface{})[0], true }; kv.Delete(k) }; return nil, false }
 func setC(k string, v interface{}, ttl int64) { kv.Store(k, []interface{}{v, time.Now().Unix() + ttl}) }
-
-func genTk() string {
-	e := time.Now().Unix() + 3600; h := hmac.New(sha256.New, []byte(TK_SEC)); h.Write([]byte(fmt.Sprint(e)))
-	return fmt.Sprintf("exp=%d~hmac=%s", e, hex.EncodeToString(h.Sum(nil)))
-}
-func valTk(t string) bool {
-	m := regexp.MustCompile(`exp=(\d+)~hmac=(.+)`).FindStringSubmatch(t); if len(m) < 3 { return false }; var e int64; fmt.Sscanf(m[1], "%d", &e); if time.Now().Unix() > e { return false }
-	h := hmac.New(sha256.New, []byte(TK_SEC)); h.Write([]byte(m[1])); return m[2] == hex.EncodeToString(h.Sum(nil))
-}
 
 func getCat() map[string][]string {
 	if c, ok := getC("CAT"); ok { return c.(map[string][]string) }
@@ -40,48 +31,33 @@ func getCat() map[string][]string {
 func getSt(id string) string {
 	if s, ok := getC("ST_" + id); ok { return s.(string) }
 	r, e := resty.New().R().SetHeader("Authorization", "Bearer "+TOKEN).SetHeader("Content-Type", "application/json").SetHeader("User-Agent", UA).SetBody("{}").Post("https://entitlement-prod.services.toffeelive.com/toffee/BD/DK/web/playback/" + id)
-	if e == nil {
-		var pb map[string]interface{}; json.Unmarshal(r.Bytes(), &pb)
-		if d, ok := pb["playbackDetails"].(map[string]interface{}); ok {
-			if dt, ok := d["data"].([]interface{}); ok && len(dt) > 0 {
-				if u, ok := dt[0].(map[string]interface{})["url"].(string); ok && u != "" { setC("ST_"+id, u, 180); return u }
-			}
+	if e != nil { fmt.Println("[ERROR] API Request Failed for ID:", id, "| Error:", e); return "" }
+	var pb map[string]interface{}; json.Unmarshal(r.Bytes(), &pb)
+	if d, ok := pb["playbackDetails"].(map[string]interface{}); ok {
+		if dt, ok := d["data"].([]interface{}); ok && len(dt) > 0 {
+			if u, ok := dt[0].(map[string]interface{})["url"].(string); ok && u != "" { setC("ST_"+id, u, 180); return u }
 		}
 	}
+	fmt.Println("[WARNING] No URL in JSON for ID:", id, "| Raw Response:", string(r.Bytes()))
 	return ""
 }
 
-func rw(b, tg string) string {
-	u, _ := url.Parse(tg); d := tg[:strings.LastIndex(tg, "/")+1]; out := []string{}; re := regexp.MustCompile(`URI=["']([^"']+)["']`)
-	for _, l := range strings.Split(b, "\n") {
-		t := strings.TrimSpace(l)
-		if t != "" && !strings.HasPrefix(t, "#") {
-			if strings.HasPrefix(t, "http") { out = append(out, t) } else if strings.HasPrefix(t, "/") { out = append(out, u.Scheme+"://"+u.Host+t) } else { out = append(out, d+t) }
-		} else if strings.Contains(t, "URI=") {
-			out = append(out, re.ReplaceAllStringFunc(t, func(m string) string {
-				p := re.FindStringSubmatch(m)[1]
-				if strings.HasPrefix(p, "http") { return `URI="`+p+`"` } else if strings.HasPrefix(p, "/") { return `URI="`+u.Scheme+"://"+u.Host+p+`"` }
-				return `URI="`+d+p+`"`
-			}))
-		} else { out = append(out, l) }
-	}
-	return strings.Join(out, "\n")
-}
-
 func mh(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*"); if r.Method == "OPTIONS" { return }; p, o, tk := r.URL.Path, "https://"+r.Host, r.URL.Query().Get("token")
-	if p == "/toffee-epl.m3u" {
+	w.Header().Set("Access-Control-Allow-Origin", "*"); if r.Method == "OPTIONS" { return }
+	if r.URL.Path == "/toffee-epl.m3u" {
 		if r.Header.Get("Sec-Fetch-Dest") == "document" || strings.Contains(r.Header.Get("Accept"), "text/html") { http.Redirect(w, r, "https://t.me/livesportsplay", 302); return }
-		m, cTk := "#EXTM3U\n#\"name\": \"Toffee EPL & BFL - Owner: Md Sohanur Rahman Hady (HADY)\"\n\n", genTk()
-		for id, c := range getCat() { m += fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"%s\", %s\n%s/play/%s.m3u8?token=%s\n\n", c[1], c[2], c[0], o, id, cTk) }
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl"); w.Write([]byte(m)); return
+		cat := getCat(); m3u := "#EXTM3U\n#\"name\": \"Toffee EPL & BFL - Owner: Md Sohanur Rahman Hady (HADY)\"\n\n"
+		var wg sync.WaitGroup; var mu sync.Mutex
+		for id, c := range cat {
+			wg.Add(1)
+			go func(id string, c []string) {
+				defer wg.Done(); u := getSt(id)
+				if u == "" { u = "https://t.me/livesportsplay/error_no_link_for_" + id + ".m3u8" }
+				mu.Lock(); m3u += fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"%s\", %s\n%s\n\n", c[1], c[2], c[0], u); mu.Unlock()
+			}(id, c)
+		}
+		wg.Wait(); w.Header().Set("Content-Type", "application/vnd.apple.mpegurl"); w.Write([]byte(m3u)); return
 	}
-	if strings.HasPrefix(p, "/play/") {
-		if !valTk(tk) { http.Error(w, "Token Expired or Invalid", 403); return }
-		id := strings.ReplaceAll(strings.ReplaceAll(p, "/play/", ""), ".m3u8", ""); st := getSt(id)
-		if st == "" { http.Error(w, "Stream Not Found or Locked", 404); return }
-		rs, _ := resty.New().R().SetHeader("User-Agent", UA).Get(st); w.Header().Set("Content-Type", "application/vnd.apple.mpegurl"); w.Write([]byte(rw(string(rs.Bytes()), st))); return
-	}
-	w.Write([]byte("Toffee Live Proxy Active"))
+	w.Write([]byte("Toffee Direct Link Playlist API Active"))
 }
 func main() { pt := os.Getenv("PORT"); if pt == "" { pt = "8080" }; http.HandleFunc("/", mh); http.ListenAndServe(":"+pt, nil) }
