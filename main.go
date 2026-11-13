@@ -47,10 +47,12 @@ func liveM3uH(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup; var mu sync.Mutex
 	
 	for _, i := range items {
-		meta, ok := i["metadata"].(map[string]interface{}); if !ok || !meta["isLive"].(bool) { continue }
-		cID := fmt.Sprintf("%.0f", meta["contentId"].(float64))
+		meta, ok := i["metadata"].(map[string]interface{}); if !ok { continue }
 		
-	
+		// Fix: Safely check boolean to prevent panic
+		isLive, okL := meta["isLive"].(bool); if !okL || !isLive { continue }
+		
+		cID := fmt.Sprintf("%.0f", meta["contentId"].(float64))
 		if seen[cID] { continue } 
 		seen[cID] = true
 		
