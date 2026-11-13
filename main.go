@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 
 	"resty.dev/v3"
 )
@@ -28,20 +29,19 @@ func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(pageURL)
 	if err != nil {
-		http.Error(w, "Failed to fetch page", 500)
+		http.Error(w, `{"error":"failed"}`, 500)
 		return
 	}
 
 	var pageData map[string]interface{}
 	if err := json.Unmarshal(resp.Bytes(), &pageData); err != nil {
-		http.Error(w, "Failed to parse JSON", 500)
+		http.Error(w, `{"error":"parse"}`, 500)
 		return
 	}
 
 	m3uContent := "#EXTM3U\n"
 	resultObj, ok := pageData["resultObj"].(map[string]interface{})
 	if !ok {
-		http.Error(w, "Invalid resultObj", 500)
 		return
 	}
 
@@ -49,6 +49,9 @@ func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 
 	for _, trayIf := range trays {
 		tray, ok := trayIf.(map[string]interface{})
@@ -89,6 +92,8 @@ func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 			if title == "" {
 				title, _ = metadata["title"].(string)
 			}
+			
+			title = strings.ReplaceAll(title, ",", " -")
 
 			var logo string
 			if emf, ok := metadata["emfAttributes"].(map[string]interface{}); ok {
@@ -99,31 +104,42 @@ func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv", contentID)
-			playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
+			wg.Add(1)
+			go func(cID, t, l string) {
+				defer wg.Done()
+				playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv", cID)
+				playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
 
-			if err == nil {
-				var playData map[string]interface{}
-				if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
-					if rawURL, ok := playData["url"].(string); ok {
-						parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
-						u, err := url.Parse(parsableURL)
-						if err == nil {
-							hdnea := u.Query().Get("hdnea")
-							u.RawQuery = ""
-							if hdnea != "" {
-								u.RawQuery = "hdnea=" + hdnea
+				if err == nil {
+					var playData map[string]interface{}
+					if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
+						if rawURL, ok := playData["url"].(string); ok {
+							parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
+							u, err := url.Parse(parsableURL)
+							if err == nil {
+								hdnea := u.Query().Get("hdnea")
+								u.RawQuery = ""
+								if hdnea != "" {
+									u.RawQuery = "hdnea=" + hdnea
+								}
+								cleanedURL := u.String()
+								cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
+								cleanedURL = strings.Replace(cleanedURL, "std_mdh-800300010", "master", -1)
+								
+								entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"Live Sports\",%s\n%s\n", l, t, cleanedURL)
+								
+								mu.Lock()
+								m3uContent += entry
+								mu.Unlock()
 							}
-							cleanedURL := u.String()
-							cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
-							m3uContent += fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"Live Sports\",%s\n%s\n", logo, title, cleanedURL)
 						}
 					}
 				}
-			}
+			}(contentID, title, logo)
 		}
 	}
 
+	wg.Wait()
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Content-Disposition", `attachment; filename="live.m3u"`)
 	w.Write([]byte(m3uContent))
@@ -140,20 +156,19 @@ func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(pageURL)
 	if err != nil {
-		http.Error(w, "Failed to fetch page", 500)
+		http.Error(w, `{"error":"failed"}`, 500)
 		return
 	}
 
 	var pageData map[string]interface{}
 	if err := json.Unmarshal(resp.Bytes(), &pageData); err != nil {
-		http.Error(w, "Failed to parse JSON", 500)
+		http.Error(w, `{"error":"parse"}`, 500)
 		return
 	}
 
 	m3uContent := "#EXTM3U\n"
 	resultObj, ok := pageData["resultObj"].(map[string]interface{})
 	if !ok {
-		http.Error(w, "Invalid resultObj", 500)
 		return
 	}
 
@@ -161,6 +176,9 @@ func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 
 	for _, trayIf := range trays {
 		tray, ok := trayIf.(map[string]interface{})
@@ -201,6 +219,8 @@ func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
 			if title == "" {
 				title, _ = metadata["title"].(string)
 			}
+			
+			title = strings.ReplaceAll(title, ",", " -")
 
 			var logo string
 			if emf, ok := metadata["emfAttributes"].(map[string]interface{}); ok {
@@ -211,40 +231,49 @@ func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv&scheme=widevine", contentID)
-			playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
+			wg.Add(1)
+			go func(cID, t, l string) {
+				defer wg.Done()
+				playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv&scheme=widevine", cID)
+				playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
 
-			if err == nil {
-				var playData map[string]interface{}
-				if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
-					rawURL, urlOk := playData["url"].(string)
-					licenseURL, licOk := playData["drm_license_url"].(string)
-					
-					if urlOk && licOk {
-						parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
-						u, err := url.Parse(parsableURL)
-						if err == nil {
-							hdnea := u.Query().Get("hdnea")
-							u.RawQuery = ""
-							if hdnea != "" {
-								u.RawQuery = "hdnea=" + hdnea
+				if err == nil {
+					var playData map[string]interface{}
+					if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
+						rawURL, urlOk := playData["url"].(string)
+						licenseURL, licOk := playData["drm_license_url"].(string)
+						
+						if urlOk && licOk {
+							parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
+							u, err := url.Parse(parsableURL)
+							if err == nil {
+								hdnea := u.Query().Get("hdnea")
+								u.RawQuery = ""
+								if hdnea != "" {
+									u.RawQuery = "hdnea=" + hdnea
+								}
+								cleanedURL := u.String()
+								cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
+
+								entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"VOD Sports\",%s\n", l, t)
+								entry += "#KODIPROP:inputstream=inputstream.adaptive\n"
+								entry += "#KODIPROP:inputstream.adaptive.manifest_type=mpd\n"
+								entry += "#KODIPROP:inputstream.adaptive.license_type=com.widevine.alpha\n"
+								entry += fmt.Sprintf("#KODIPROP:inputstream.adaptive.license_key=%s\n", licenseURL)
+								entry += fmt.Sprintf("%s\n", cleanedURL)
+
+								mu.Lock()
+								m3uContent += entry
+								mu.Unlock()
 							}
-							cleanedURL := u.String()
-							cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
-
-							m3uContent += fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"VOD Sports\",%s\n", logo, title)
-							m3uContent += "#KODIPROP:inputstream=inputstream.adaptive\n"
-							m3uContent += "#KODIPROP:inputstream.adaptive.manifest_type=mpd\n"
-							m3uContent += "#KODIPROP:inputstream.adaptive.license_type=com.widevine.alpha\n"
-							m3uContent += fmt.Sprintf("#KODIPROP:inputstream.adaptive.license_key=%s\n", licenseURL)
-							m3uContent += fmt.Sprintf("%s\n", cleanedURL)
 						}
 					}
 				}
-			}
+			}(contentID, title, logo)
 		}
 	}
 
+	wg.Wait()
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Content-Disposition", `attachment; filename="vod.m3u"`)
 	w.Write([]byte(m3uContent))
@@ -261,3 +290,4 @@ func main() {
 
 	http.ListenAndServe(":"+port, nil)
 }
+Access-Control-Allow-Headers
