@@ -19,6 +19,25 @@ func enableCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
+// Universal Item Extractor (Handles both Tray/Assets and Direct Items)
+func extractItems(containers []interface{}) []map[string]interface{} {
+	var items []map[string]interface{}
+	for _, cIf := range containers {
+		c, ok := cIf.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if assets, hasAssets := c["assets"].(map[string]interface{}); hasAssets {
+			if inner, ok := assets["containers"].([]interface{}); ok {
+				items = append(items, extractItems(inner)...)
+			}
+		} else if _, hasMeta := c["metadata"]; hasMeta {
+			items = append(items, c)
+		}
+	}
+	return items
+}
+
 func seriesHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
 	if r.Method == "OPTIONS" {
@@ -71,20 +90,20 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 		originalURL := matches[1]
 		parsableURL := strings.ReplaceAll(originalURL, `\u0026`, "&")
 		u, err := url.Parse(parsableURL)
-		
+
 		if err == nil {
 			hdnea := u.Query().Get("hdnea")
 			u.RawQuery = ""
 			if hdnea != "" {
 				u.RawQuery = "hdnea=" + hdnea
 			}
-			
+
 			cleanedURL := u.String()
 			cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
 			if isLive == "true" {
 				cleanedURL = strings.Replace(cleanedURL, "std_mdh-800300010", "master", -1)
 			}
-			
+
 			rawJSON = strings.Replace(rawJSON, `"`+originalURL+`"`, `"`+cleanedURL+`"`, 1)
 		}
 	}
@@ -104,114 +123,97 @@ func liveM3uHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(pageURL)
 	if err != nil {
-		http.Error(w, `{"error":"failed"}`, 500)
+		http.Error(w, "Failed to fetch page API", 500)
 		return
 	}
 
 	var pageData map[string]interface{}
 	if err := json.Unmarshal(resp.Bytes(), &pageData); err != nil {
-		http.Error(w, `{"error":"parse"}`, 500)
+		http.Error(w, "Failed to parse API JSON", 500)
 		return
 	}
 
-	m3uContent := "#EXTM3U\n"
 	resultObj, ok := pageData["resultObj"].(map[string]interface{})
 	if !ok {
+		http.Error(w, "Invalid API structure: Missing resultObj", 500)
 		return
 	}
 
-	trays, ok := resultObj["containers"].([]interface{})
+	containers, ok := resultObj["containers"].([]interface{})
 	if !ok {
+		http.Error(w, "Invalid API structure: Missing containers", 500)
 		return
 	}
 
+	items := extractItems(containers)
+	m3uContent := "#EXTM3U\n"
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	for _, trayIf := range trays {
-		tray, ok := trayIf.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		assets, ok := tray["assets"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		items, ok := assets["containers"].([]interface{})
+	for _, item := range items {
+		metadata, ok := item["metadata"].(map[string]interface{})
 		if !ok {
 			continue
 		}
 
-		for _, itemIf := range items {
-			item, ok := itemIf.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			metadata, ok := item["metadata"].(map[string]interface{})
-			if !ok {
-				continue
-			}
+		isLive, _ := metadata["isLive"].(bool)
+		if !isLive {
+			continue
+		}
 
-			isLive, _ := metadata["isLive"].(bool)
-			if !isLive {
-				continue
+		contentIdF, ok := metadata["contentId"].(float64)
+		if !ok {
+			continue
+		}
+		contentID := fmt.Sprintf("%.0f", contentIdF)
+
+		title, _ := metadata["episodeTitle"].(string)
+		if title == "" {
+			title, _ = metadata["title"].(string)
+		}
+		title = strings.ReplaceAll(title, ",", " -")
+
+		var logo string
+		if emf, ok := metadata["emfAttributes"].(map[string]interface{}); ok {
+			if l, ok := emf["landscape_thumb"].(string); ok {
+				logo = l
+			} else if s, ok := emf["square_thumb"].(string); ok {
+				logo = s
 			}
+		}
 
-			contentIdF, ok := metadata["contentId"].(float64)
-			if !ok {
-				continue
-			}
-			contentID := fmt.Sprintf("%.0f", contentIdF)
+		wg.Add(1)
+		go func(cID, t, l string) {
+			defer wg.Done()
+			playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv", cID)
+			playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
 
-			title, _ := metadata["episodeTitle"].(string)
-			if title == "" {
-				title, _ = metadata["title"].(string)
-			}
-			
-			title = strings.ReplaceAll(title, ",", " -")
-
-			var logo string
-			if emf, ok := metadata["emfAttributes"].(map[string]interface{}); ok {
-				if l, ok := emf["landscape_thumb"].(string); ok {
-					logo = l
-				} else if s, ok := emf["square_thumb"].(string); ok {
-					logo = s
-				}
-			}
-
-			wg.Add(1)
-			go func(cID, t, l string) {
-				defer wg.Done()
-				playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv", cID)
-				playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
-
-				if err == nil {
-					var playData map[string]interface{}
-					if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
-						if rawURL, ok := playData["url"].(string); ok {
-							parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
-							u, err := url.Parse(parsableURL)
-							if err == nil {
-								hdnea := u.Query().Get("hdnea")
-								u.RawQuery = ""
-								if hdnea != "" {
-									u.RawQuery = "hdnea=" + hdnea
-								}
-								cleanedURL := u.String()
-								cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
-								cleanedURL = strings.Replace(cleanedURL, "std_mdh-800300010", "master", -1)
-								
-								entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"Live Sports\",%s\n%s\n", l, t, cleanedURL)
-								
-								mu.Lock()
-								m3uContent += entry
-								mu.Unlock()
+			if err == nil {
+				var playData map[string]interface{}
+				if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
+					if rawURL, ok := playData["url"].(string); ok {
+						parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
+						u, err := url.Parse(parsableURL)
+						if err == nil {
+							hdnea := u.Query().Get("hdnea")
+							u.RawQuery = ""
+							if hdnea != "" {
+								u.RawQuery = "hdnea=" + hdnea
 							}
+							cleanedURL := u.String()
+							cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
+							cleanedURL = strings.Replace(cleanedURL, "std_mdh-800300010", "master", -1)
+
+							entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"Live Sports\",%s\n%s\n", l, t, cleanedURL)
+
+							mu.Lock()
+							m3uContent += entry
+							mu.Unlock()
 						}
 					}
 				}
-			}(contentID, title, logo)
-		}
+			}
+		}(contentID, title, logo)
 	}
 
 	wg.Wait()
@@ -231,121 +233,104 @@ func vodM3uHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(pageURL)
 	if err != nil {
-		http.Error(w, `{"error":"failed"}`, 500)
+		http.Error(w, "Failed to fetch page API", 500)
 		return
 	}
 
 	var pageData map[string]interface{}
 	if err := json.Unmarshal(resp.Bytes(), &pageData); err != nil {
-		http.Error(w, `{"error":"parse"}`, 500)
+		http.Error(w, "Failed to parse API JSON", 500)
 		return
 	}
 
-	m3uContent := "#EXTM3U\n"
 	resultObj, ok := pageData["resultObj"].(map[string]interface{})
 	if !ok {
+		http.Error(w, "Invalid API structure: Missing resultObj", 500)
 		return
 	}
 
-	trays, ok := resultObj["containers"].([]interface{})
+	containers, ok := resultObj["containers"].([]interface{})
 	if !ok {
+		http.Error(w, "Invalid API structure: Missing containers", 500)
 		return
 	}
 
+	items := extractItems(containers)
+	m3uContent := "#EXTM3U\n"
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	for _, trayIf := range trays {
-		tray, ok := trayIf.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		assets, ok := tray["assets"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		items, ok := assets["containers"].([]interface{})
+	for _, item := range items {
+		metadata, ok := item["metadata"].(map[string]interface{})
 		if !ok {
 			continue
 		}
 
-		for _, itemIf := range items {
-			item, ok := itemIf.(map[string]interface{})
-			if !ok {
-				continue
+		isLive, _ := metadata["isLive"].(bool)
+		if isLive {
+			continue
+		}
+
+		contentIdF, ok := metadata["contentId"].(float64)
+		if !ok {
+			continue
+		}
+		contentID := fmt.Sprintf("%.0f", contentIdF)
+
+		title, _ := metadata["episodeTitle"].(string)
+		if title == "" {
+			title, _ = metadata["title"].(string)
+		}
+		title = strings.ReplaceAll(title, ",", " -")
+
+		var logo string
+		if emf, ok := metadata["emfAttributes"].(map[string]interface{}); ok {
+			if l, ok := emf["landscape_thumb"].(string); ok {
+				logo = l
+			} else if s, ok := emf["square_thumb"].(string); ok {
+				logo = s
 			}
-			metadata, ok := item["metadata"].(map[string]interface{})
-			if !ok {
-				continue
-			}
+		}
 
-			isLive, _ := metadata["isLive"].(bool)
-			if isLive {
-				continue
-			}
+		wg.Add(1)
+		go func(cID, t, l string) {
+			defer wg.Done()
+			playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv&scheme=widevine", cID)
+			playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
 
-			contentIdF, ok := metadata["contentId"].(float64)
-			if !ok {
-				continue
-			}
-			contentID := fmt.Sprintf("%.0f", contentIdF)
+			if err == nil {
+				var playData map[string]interface{}
+				if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
+					rawURL, urlOk := playData["url"].(string)
+					licenseURL, licOk := playData["drm_license_url"].(string)
 
-			title, _ := metadata["episodeTitle"].(string)
-			if title == "" {
-				title, _ = metadata["title"].(string)
-			}
-			
-			title = strings.ReplaceAll(title, ",", " -")
-
-			var logo string
-			if emf, ok := metadata["emfAttributes"].(map[string]interface{}); ok {
-				if l, ok := emf["landscape_thumb"].(string); ok {
-					logo = l
-				} else if s, ok := emf["square_thumb"].(string); ok {
-					logo = s
-				}
-			}
-
-			wg.Add(1)
-			go func(cID, t, l string) {
-				defer wg.Done()
-				playURL := fmt.Sprintf("https://playcipher.bioscopelive.com/v1/manifest?providers_content_id=%s&provider=sonyliv&scheme=widevine", cID)
-				playResp, err := client.R().SetHeader("User-Agent", "Mozilla/5.0").Get(playURL)
-
-				if err == nil {
-					var playData map[string]interface{}
-					if err := json.Unmarshal(playResp.Bytes(), &playData); err == nil {
-						rawURL, urlOk := playData["url"].(string)
-						licenseURL, licOk := playData["drm_license_url"].(string)
-						
-						if urlOk && licOk {
-							parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
-							u, err := url.Parse(parsableURL)
-							if err == nil {
-								hdnea := u.Query().Get("hdnea")
-								u.RawQuery = ""
-								if hdnea != "" {
-									u.RawQuery = "hdnea=" + hdnea
-								}
-								cleanedURL := u.String()
-								cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
-
-								entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"VOD Sports\",%s\n", l, t)
-								entry += "#KODIPROP:inputstream=inputstream.adaptive\n"
-								entry += "#KODIPROP:inputstream.adaptive.manifest_type=mpd\n"
-								entry += "#KODIPROP:inputstream.adaptive.license_type=com.widevine.alpha\n"
-								entry += fmt.Sprintf("#KODIPROP:inputstream.adaptive.license_key=%s\n", licenseURL)
-								entry += fmt.Sprintf("%s\n", cleanedURL)
-
-								mu.Lock()
-								m3uContent += entry
-								mu.Unlock()
+					if urlOk && licOk {
+						parsableURL := strings.ReplaceAll(rawURL, `\u0026`, "&")
+						u, err := url.Parse(parsableURL)
+						if err == nil {
+							hdnea := u.Query().Get("hdnea")
+							u.RawQuery = ""
+							if hdnea != "" {
+								u.RawQuery = "hdnea=" + hdnea
 							}
+							cleanedURL := u.String()
+							cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
+
+							entry := fmt.Sprintf("#EXTINF:-1 tvg-logo=\"%s\" group-title=\"VOD Sports\",%s\n", l, t)
+							entry += "#KODIPROP:inputstream=inputstream.adaptive\n"
+							entry += "#KODIPROP:inputstream.adaptive.manifest_type=mpd\n"
+							entry += "#KODIPROP:inputstream.adaptive.license_type=com.widevine.alpha\n"
+							entry += fmt.Sprintf("#KODIPROP:inputstream.adaptive.license_key=%s\n", licenseURL)
+							entry += fmt.Sprintf("%s\n", cleanedURL)
+
+							mu.Lock()
+							m3uContent += entry
+							mu.Unlock()
 						}
 					}
 				}
-			}(contentID, title, logo)
-		}
+			}
+		}(contentID, title, logo)
 	}
 
 	wg.Wait()
