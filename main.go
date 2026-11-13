@@ -1,11 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	"resty.dev/v3"
@@ -18,16 +18,22 @@ func enableCORS(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 }
 
-func seriesHandler(w http.ResponseWriter, r *http.Request) {
+func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
 	if r.Method == "OPTIONS" {
+		return
+	}
+
+	target := r.URL.Query().Get("url")
+	if target == "" {
+		http.Error(w, `{"error": "Missing url parameter"}`, 400)
 		return
 	}
 
 	client := resty.New()
 	resp, err := client.R().
 		SetHeader("User-Agent", "Mozilla/5.0").
-		Get("https://apiv3.sonyliv.com/AGL/2.6/SR/ENG/MWEB/BD/FL/CONTENT/DETAIL/BUNDLE/1500001077")
+		Get(target)
 
 	if err != nil {
 		http.Error(w, `{"error": "Failed"}`, 500)
@@ -61,33 +67,31 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var playData map[string]interface{}
-	if err := json.Unmarshal(resp.Bytes(), &playData); err == nil {
-		if rawURL, ok := playData["url"].(string); ok {
+	rawJSON := string(resp.Bytes())
 
-			u, err := url.Parse(rawURL)
-			if err == nil {
-				hdnea := u.Query().Get("hdnea")
+	re := regexp.MustCompile(`"url"\s*:\s*"([^"]+)"`)
+	matches := re.FindStringSubmatch(rawJSON)
 
-				u.RawQuery = ""
-
-				if hdnea != "" {
-					u.RawQuery = "hdnea=" + hdnea
-				}
-
-				cleanedURL := u.String()
-				cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
-
-				playData["url"] = cleanedURL
+	if len(matches) > 1 {
+		originalURL := matches[1]
+		u, err := url.Parse(originalURL)
+		
+		if err == nil {
+			hdnea := u.Query().Get("hdnea")
+			u.RawQuery = ""
+			
+			if hdnea != "" {
+				u.RawQuery = "hdnea=" + hdnea
 			}
-		}
+			
+			cleanedURL := u.String()
+			cleanedURL = strings.Replace(cleanedURL, "grameenphonedrm", "sonygdrm", -1)
 
-		modifiedJSON, _ := json.Marshal(playData)
-		w.Write(modifiedJSON)
-		return
+			rawJSON = strings.Replace(rawJSON, `"`+originalURL+`"`, `"`+cleanedURL+`"`, 1)
+		}
 	}
 
-	w.Write(resp.Bytes())
+	w.Write([]byte(rawJSON))
 }
 
 func main() {
@@ -95,7 +99,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	http.HandleFunc("/api/series", seriesHandler)
+	http.HandleFunc("/api/proxy", proxyHandler)
 	http.HandleFunc("/api/play", playHandler)
 	http.ListenAndServe(":"+port, nil)
 }
